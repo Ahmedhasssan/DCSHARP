@@ -173,6 +173,12 @@ class GaussianModel:
         self.percent_dense = training_args.percent_dense
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.scale_gradient_accum = torch.zeros((self.get_scaling.shape[0], 1), device="cuda")
+        self.denom_scale = torch.zeros((self.get_scaling.shape[0], 1), device="cuda")
+        self.rotations_gradient_accum = torch.zeros((self.get_rotation.shape[0], 1), device="cuda")
+        self.denom_rotations = torch.zeros((self.get_rotation.shape[0], 1), device="cuda")
+        self.shs_gradient_accum = torch.zeros((self.get_features.shape[0], 1), device="cuda")
+        self.denom_shs = torch.zeros((self.get_features.shape[0], 1), device="cuda")
 
         l = [
             {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
@@ -391,6 +397,15 @@ class GaussianModel:
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
+        self.scale_gradient_accum = torch.zeros((self.get_scaling.shape[0], 1), device="cuda")
+        self.denom_scale = torch.zeros((self.get_scaling.shape[0], 1), device="cuda")
+
+        self.rotations_gradient_accum = torch.zeros((self.get_rotation.shape[0], 1), device="cuda")
+        self.denom_rotations = torch.zeros((self.get_rotation.shape[0], 1), device="cuda")
+
+        self.shs_gradient_accum = torch.zeros((self.get_features.shape[0], 1), device="cuda")
+        self.denom_shs = torch.zeros((self.get_features.shape[0], 1), device="cuda")
+
     def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
         n_init_points = self.get_xyz.shape[0]
         # Extract points that satisfy the gradient condition
@@ -431,9 +446,61 @@ class GaussianModel:
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation)
 
-    def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size):
+    def densify_and_prune(self, scale_grad, iteration, max_grad, min_opacity, extent, max_screen_size):
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
+
+        # if iteration > 600:
+        #     previous_scale = scale_grad[iteration-100]
+
+        grads_scale = self.scale_gradient_accum / self.denom_scale
+        grads_scale[grads_scale.isnan()] = 0.0
+        scale_grad[iteration] = grads_scale
+        top_values, top_indices = torch.topk(grads_scale.squeeze(), int(0.02*len(grads_scale.detach().cpu())))
+        close_mask = torch.zeros_like(grads_scale, dtype=torch.bool)
+        close_mask[top_indices] = True
+        
+        # if iteration==20000:
+        #     print(close_mask.sum().item())
+        #     import pdb;pdb.set_trace()
+
+        # grads_rotations = self.rotations_gradient_accum / self.denom_rotations
+        # grads_rotations[grads_rotations.isnan()] = 0.0
+        # top_values, top_indices = torch.topk(grads_rotations.squeeze(), int(0.05*len(grads_rotations.detach().cpu())))
+        # close_mask = torch.zeros_like(grads_rotations, dtype=torch.bool)
+        # close_mask[top_indices] = True
+
+        # grads_shs = self.shs_gradient_accum / self.denom_shs
+        # grads_shs[grads_shs.isnan()] = 0.0
+        # top_values, top_indices = torch.topk(grads_shs.squeeze(), int(0.1*len(grads_shs.detach().cpu())))
+        # close_mask = torch.zeros_like(grads_shs, dtype=torch.bool)
+        # close_mask[top_indices] = True
+
+        # close_mask = torch.tensor([])
+        # if iteration > 600:
+        #     threshold = 1e-14
+        #     # Get the minimum shape between the current and previous tensor
+        #     min_rows = min(grads_scale.size(0), previous_scale.size(0))
+        #     min_cols = min(grads_scale.size(1), previous_scale.size(1))
+
+        #     # Compare only the overlapping portion
+        #     previous_overlap = previous_scale[:min_rows, :min_cols]
+        #     current_overlap = grads_scale[:min_rows, :min_cols]
+
+        #     difference = torch.abs(current_overlap - previous_overlap)
+        #     close_mask = (difference < threshold)
+
+            # import pdb;pdb.set_trace()
+            # close_mask = close_mask.bool().squeeze()
+            # self.prune_points(close_mask.bool().squeeze())
+
+            # unchanged_grads = current_overlap[close_mask]
+            # # grads_scale_detach = grads_scale.cpu()
+            # grads_scale_detach = unchanged_grads.cpu()
+            # numpy_tensor = grads_scale_detach.numpy()
+            # np.savetxt(os.path.join("/home/ah2288/gs_baseline/gaussian-splatting/scale_gradient/same_grads", f"gradient{iteration}.txt"), numpy_tensor)
+
+        # import pdb;pdb.set_trace()
 
         self.densify_and_clone(grads, max_grad, extent)
         self.densify_and_split(grads, max_grad, extent)
@@ -443,10 +510,66 @@ class GaussianModel:
             big_points_vs = self.max_radii2D > max_screen_size
             big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
+        if close_mask.numel() > 0:
+            if self.get_opacity.shape[0] > close_mask.shape[0]:
+                pad_size = (self.get_opacity.shape[0] - close_mask.shape[0])
+                close_mask = torch.cat((close_mask, torch.zeros(pad_size, 1).cuda()), dim=0)
+            else:
+                min_rows = min(self.get_opacity.size(0), close_mask.size(0))
+                close_mask = close_mask[:min_rows]
+            # import pdb;pdb.set_trace()
+            # prune_mask = torch.logical_or(prune_mask, close_mask.bool().squeeze())
+            prune_mask = torch.logical_or(prune_mask, close_mask.squeeze()) ## Turn it on for pruning
         self.prune_points(prune_mask)
 
         torch.cuda.empty_cache()
+    
+    def scaling_gradient(self, iteration, max_grad_scale, min_opacity, extent, max_screen_size):
 
-    def add_densification_stats(self, viewspace_point_tensor, update_filter):
+        grads_scale = self.scale_gradient_accum / self.denom_scale
+        grads_scale[grads_scale.isnan()] = 0.0
+
+        # import pdb;pdb.set_trace()
+
+        grads_scale_detach = grads_scale.cpu()
+        numpy_tensor = grads_scale_detach.numpy()
+        np.savetxt(os.path.join("/home/ah2288/gs_baseline/gaussian-splatting/scale_gradient", f"gradient{iteration}.txt"), numpy_tensor)
+
+        # self.densify_and_clone(grads, max_grad, extent)
+        # self.densify_and_split(grads, max_grad, extent)
+
+        # prune_mask = (self.get_opacity < min_opacity).squeeze()
+        # if max_screen_size:
+        #     big_points_vs = self.max_radii2D > max_screen_size
+        #     big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
+        #     prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
+        # self.prune_points(prune_mask)
+
+        torch.cuda.empty_cache()
+    
+    def scale_prune(self, iteration):
+
+        # try:
+        prune_mask = (self.get_scaling[:,0] > 0.6 * torch.max(self.get_scaling, dim=1).values.max().cpu()).squeeze()
+        threshold = 0.3 * torch.max(self.get_scaling, dim=1).values.max().cpu()
+        # print(self.get_scaling.unique())
+        pruned_scale = [num if num > threshold else 0 for num in self.get_scaling[:,0]]
+        # import pdb;pdb.set_trace()
+        # grads_scale_detach = pruned_scale
+        # numpy_tensor = grads_scale_detach.numpy()
+        np.savetxt(os.path.join("/home/ah2288/gs_baseline/gaussian-splatting/pruned_indexes/pruned_scale", f"gradient{iteration}.txt"), pruned_scale)
+        self.prune_points(prune_mask)
+        torch.cuda.empty_cache()
+        # except:
+        #     pass
+
+    def add_densification_stats(self, viewspace_point_tensor, update_filter, scales_grad, rotations_grad, shs_grad):
+        # import pdb;pdb.set_trace()
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
+        self.scale_gradient_accum[update_filter[:,0]] += torch.norm(scales_grad.grad[update_filter,0], dim=-1, keepdim=True)
+        self.denom_scale[update_filter] += 1
+        self.rotations_gradient_accum[update_filter[:,0]] += torch.norm(rotations_grad.grad[update_filter,0], dim=-1, keepdim=True)
+        self.denom_rotations[update_filter] += 1
+        self.shs_gradient_accum[update_filter[:,0]] += torch.norm(shs_grad.grad.mean(2)[update_filter,0], dim=-1, keepdim=True)
+        self.denom_shs[update_filter] += 1

@@ -240,6 +240,7 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
             c2w[:3, 1:3] *= -1
 
             # get the world-to-camera transform and set R, T
+            # import pdb;pdb.set_trace()
             w2c = np.linalg.inv(c2w)
             R = np.transpose(w2c[:3,:3])  # R is stored transposed due to 'glm' in CUDA code
             T = w2c[:3, 3]
@@ -261,7 +262,8 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
             FovX = fovx
 
             cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX,
-                            image_path=image_path, image_name=image_name, width=image.size[0], height=image.size[1]))
+                            depth_params=None, image_path=image_path, image_name=image_name, depth_path="", 
+                            width=image.size[0], height=image.size[1], is_test=True))
             
     return cam_infos
 
@@ -270,6 +272,93 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
     train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension)
     print("Reading Test Transforms")
     test_cam_infos = readCamerasFromTransforms(path, "transforms_test.json", white_background, extension)
+
+    if not eval:
+        train_cam_infos.extend(test_cam_infos)
+        test_cam_infos = []
+
+    nerf_normalization = getNerfppNorm(train_cam_infos)
+
+    ply_path = os.path.join(path, "points3d.ply")
+    if not os.path.exists(ply_path):
+        # Since this data set has no colmap data, we start with random points
+        num_pts = 100_000
+        print(f"Generating random point cloud ({num_pts})...")
+        
+        # We create random points inside the bounds of the synthetic Blender scenes
+        xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
+        shs = np.random.random((num_pts, 3)) / 255.0
+        pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
+
+        storePly(ply_path, xyz, SH2RGB(shs) * 255)
+    try:
+        pcd = fetchPly(ply_path)
+    except:
+        pcd = None
+
+    scene_info = SceneInfo(point_cloud=pcd,
+                           train_cameras=train_cam_infos,
+                           test_cameras=test_cam_infos,
+                           nerf_normalization=nerf_normalization,
+                           ply_path=ply_path)
+    return scene_info
+
+def readCameras(path, camfile, splitfile, white_background, extension=".jpg"):
+    train_cam_infos = []
+    test_cam_infos = []
+    with open(os.path.join(path, splitfile)) as split_file:
+        split_type = json.load(split_file)
+        train = split_type["train"]
+        test = split_type["test"]
+
+    with open(os.path.join(path, camfile)) as json_file:
+        contents = json.load(json_file)
+        fovx = 1.0212345
+        frames = contents["KRT"]
+        for idx, frame in enumerate(frames):
+            cam_name = os.path.join(path, frame["cameraId"] + extension)
+
+            # NeRF 'transform_matrix' is a camera-to-world transform
+            w2c = np.transpose(np.array(frame["T"]))
+            # # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
+            # c2w[:3, 1:3] *= -1
+
+            # get the world-to-camera transform and set R, T
+            # w2c = np.linalg.inv(c2w)
+            R = w2c[:3,:3]  # R is stored transposed due to 'glm' in CUDA code
+            # import pdb;pdb.set_trace()
+            # R = w2c[:3,:3]  # R is stored transposed due to 'glm' in CUDA code
+            T = w2c[:3, 3]
+
+            image_path = os.path.join(path, "images-jpeg-1k/"+frame["cameraId"]+ extension)
+            image_name = Path(cam_name).stem
+            image = Image.open(image_path)
+
+            im_data = np.array(image.convert("RGBA"))
+
+            bg = np.array([1,1,1]) if white_background else np.array([0, 0, 0])
+
+            norm_data = im_data / 255.0
+            arr = norm_data[:,:,:3] * norm_data[:, :, 3:4] + bg * (1 - norm_data[:, :, 3:4])
+            image = Image.fromarray(np.array(arr*255.0, dtype=np.byte), "RGB")
+
+            fovy = focal2fov(fov2focal(fovx, image.size[0]), image.size[1])
+            FovY = fovy 
+            FovX = fovx
+            if frame["cameraId"] in train:
+                train_cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX,
+                                depth_params=None, image_path=image_path, image_name=image_name, depth_path="", 
+                                width=image.size[0], height=image.size[1], is_test=True))
+            elif frame["cameraId"] in test:
+                test_cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX,
+                                depth_params=None, image_path=image_path, image_name=image_name, depth_path="", 
+                                width=image.size[0], height=image.size[1], is_test=True))
+    # import pdb;pdb.set_trace()
+    return train_cam_infos, test_cam_infos
+
+def readVrNeRFInfo(path, white_background, eval, extension=".jpg"):
+    print("Reading Training Cameras")
+    train_cam_infos, test_cam_infos = readCameras(path, "cameras.json", "splits.json", white_background, extension)
     
     if not eval:
         train_cam_infos.extend(test_cam_infos)
@@ -303,5 +392,6 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
 
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
-    "Blender" : readNerfSyntheticInfo
+    "Blender" : readNerfSyntheticInfo,
+    "vr-nerf" : readVrNeRFInfo,
 }

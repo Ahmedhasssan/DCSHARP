@@ -18,7 +18,18 @@ import sys
 from scene import Scene, GaussianModel
 from utils.general_utils import safe_state, get_expon_lr_func
 import uuid
+import lpips
 from tqdm import tqdm
+import torch
+from torchvision import transforms
+from PIL import Image
+import numpy as np
+import kiui
+from kiui.cam import orbit_camera
+import imageio
+from PIL import Image
+from utils.graphics_utils import fov2focal, focal2fov
+from scene.cameras import Camera
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
@@ -50,6 +61,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     viewpoint_indices = list(range(len(viewpoint_stack)))
     ema_loss_for_log = 0.0
     ema_Ll1depth_for_log = 0.0
+    scale_grad = {}
 
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
@@ -82,6 +94,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             viewpoint_stack = scene.getTrainCameras().copy()
             viewpoint_indices = list(range(len(viewpoint_stack)))
         rand_idx = randint(0, len(viewpoint_indices) - 1)
+        # import pdb;pdb.set_trace()
         viewpoint_cam = viewpoint_stack.pop(rand_idx)
         vind = viewpoint_indices.pop(rand_idx)
 
@@ -92,10 +105,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         bg = torch.rand((3), device="cuda") if opt.random_background else background
 
         render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp)
-        image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+        image, viewspace_point_tensor, visibility_filter, radii, scales_grad, rotations_grad, shs_grad = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"], render_pkg["scales_grad"], render_pkg["rotations_grad"], render_pkg["shs_grad"]
 
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
+        # to_pil_image = transforms.ToPILImage()
+        # image = to_pil_image(gt_image)
+        # # Save the image using PIL's `save` method
+        # image.save("saved_image.png")
+        # import pdb;pdb.set_trace()
+
         Ll1 = l1_loss(image, gt_image)
         ssim_value = ssim(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value)
@@ -135,16 +154,31 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
 
+            # model_path = "/home/ah2288/gs_baseline/gaussian-splatting/"
+            # scene_name = "Table"
+            # if iteration % 30000 == 0:
+            #     #start = time.time()
+            #     inference(gaussians, model_path, pipe, scene_name, iteration, bg)
+            #     import pdb;pdb.set_trace()
+            # if iteration % 30000 == 0:
+            #     print(gaussians.get_xyz.shape)
+            #     import pdb;pdb.set_trace()
+
             # Densification
             if iteration < opt.densify_until_iter:
                 # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
-                gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+                gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter, scales_grad, rotations_grad, shs_grad)
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
-                
+                    gaussians.densify_and_prune(scale_grad, iteration, opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
+                    # gaussians.scale_prune(iteration)
+                    # gaussians.scaling_gradient(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
+
+                # if iteration % 5000 == 0:
+                #     gaussians.scaling_gradient(iteration, opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
+
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
 
@@ -160,16 +194,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
 
 def prepare_output_and_logger(args):    
-    if not args.model_path:
-        if os.getenv('OAR_JOB_ID'):
-            unique_str=os.getenv('OAR_JOB_ID')
-        else:
-            unique_str = str(uuid.uuid4())
-        args.model_path = os.path.join("./output/", unique_str[0:10])
+    if not os.path.isdir(args.model_path):
+        # if os.getenv('OAR_JOB_ID'):
+        #     unique_str=os.getenv('OAR_JOB_ID')
+        # else:
+        #     unique_str = str(uuid.uuid4())
+        # args.model_path = os.path.join("./output/", unique_str[0:10])
         
     # Set up output folder
-    print("Output folder: {}".format(args.model_path))
-    os.makedirs(args.model_path, exist_ok = True)
+    # print("Output folder: {}".format(args.model_path))
+        os.makedirs(args.model_path, exist_ok = True)
     with open(os.path.join(args.model_path, "cfg_args"), 'w') as cfg_log_f:
         cfg_log_f.write(str(Namespace(**vars(args))))
 
@@ -180,6 +214,50 @@ def prepare_output_and_logger(args):
     else:
         print("Tensorboard not available: not logging progress")
     return tb_writer
+score_lpips = lpips.LPIPS(net='alex').cuda()
+
+def get_cam_views(cam_poses):
+    c2w = cam_poses
+    c2w[:3, 1:3] *= -1
+    #import pdb;pdb.set_trace()
+    c2w[0:2] *= -1
+
+    w2c = np.linalg.inv(c2w)
+    R = np.transpose(w2c[:3,:3])  # R is stored transposed due to 'glm' in CUDA code
+    #R = w2c[:3,:3]
+    T = w2c[:3, 3]
+    fovx = 1250.0000504168488
+    fovy = 1250.0000504168488
+    fovy = focal2fov(fov2focal(fovx, 800), 800)
+    FovY = fovy 
+    FovX = fovx
+    camera_views = Camera2(R, T, FovX, FovY)
+    return camera_views
+
+@torch.no_grad()
+def inference(gaussians, model_path_new, pipe, scene_name, iteration, bg):
+    threeD_path = os.path.join(model_path_new, "3D")
+    if not os.path.exists(threeD_path):
+        os.mkdir(threeD_path)
+
+    # import pdb;pdb.set_trace()
+    elevation = -85
+    cam_radius = 6.5
+    images = []
+    azimuth = np.arange(0, 720, 4, dtype=np.int32)
+    for azi in tqdm(azimuth):
+        cam_poses = torch.from_numpy(orbit_camera(elevation, azi, radius=cam_radius, opengl=True))
+        #import pdb;pdb.set_trace()
+        viewpoint_cam_list = get_cam_views(cam_poses)
+        image = render(viewpoint_cam_list, gaussians, pipe, bg)["render"]
+        image = image.unsqueeze(0)
+        images.append((image.permute(0,2,3,1).contiguous().float().cpu().numpy() * 255).astype(np.uint8))
+    images = np.concatenate(images, axis=0)
+    try:
+        imageio.mimwrite(os.path.join(threeD_path, scene_name +'_'+str(iteration) + '.mp4'), images, fps=30)
+    except:
+        import pdb;pdb.set_trace()
+    print("Rendering is finished")
 
 def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, train_test_exp):
     if tb_writer:
@@ -197,6 +275,8 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
             if config['cameras'] and len(config['cameras']) > 0:
                 l1_test = 0.0
                 psnr_test = 0.0
+                ssim_test = 0.0
+                lpips_test = 0.0
                 for idx, viewpoint in enumerate(config['cameras']):
                     image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
@@ -209,12 +289,18 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                             tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
                     l1_test += l1_loss(image, gt_image).mean().double()
                     psnr_test += psnr(image, gt_image).mean().double()
+                    ssim_test +=ssim(image, gt_image).mean().double()
+                    lpips_test += score_lpips(image, gt_image).mean().double()
                 psnr_test /= len(config['cameras'])
+                ssim_test /= len(config['cameras'])
+                lpips_test /= len(config['cameras'])
                 l1_test /= len(config['cameras'])          
-                print("\n[ITER {}] Evaluating {}: L1 {} PSNR {}".format(iteration, config['name'], l1_test, psnr_test))
+                print("\n[ITER {}] Evaluating {}: L1 {} PSNR {} SSIM {} LPIPS {}".format(iteration, config['name'], l1_test, psnr_test, ssim_test, lpips_test))
                 if tb_writer:
                     tb_writer.add_scalar(config['name'] + '/loss_viewpoint - l1_loss', l1_test, iteration)
                     tb_writer.add_scalar(config['name'] + '/loss_viewpoint - psnr', psnr_test, iteration)
+                    tb_writer.add_scalar(config['name'] + '/loss_viewpoint - ssim', ssim_test, iteration)
+                    tb_writer.add_scalar(config['name'] + '/loss_viewpoint - lpips', lpips_test, iteration)
 
         if tb_writer:
             tb_writer.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
@@ -235,8 +321,9 @@ if __name__ == "__main__":
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument('--disable_viewer', action='store_true', default=False)
-    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
+    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[30_000])
     parser.add_argument("--start_checkpoint", type=str, default = None)
+    # parser.add_argument("--model_path", type=str, default = "/home/ah2288/gs_baseline/gaussian-splatting")
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
     

@@ -43,10 +43,10 @@ if not args.skip_training:
     start_time = time.time()
     for scene in mipnerf360_outdoor_scenes:
         source = args.mipnerf360 + "/" + scene
-        os.system("python train.py -s " + source + " -i images_4 -m " + args.output_path + "/" + scene + common_args)
+        os.system("python train.py -s " + source + " -i images_8 -m " + args.output_path + "/" + scene + common_args)
     for scene in mipnerf360_indoor_scenes:
         source = args.mipnerf360 + "/" + scene
-        os.system("python train.py -s " + source + " -i images_2 -m " + args.output_path + "/" + scene + common_args)
+        os.system("python train.py -s " + source + " -i images_4 -m " + args.output_path + "/" + scene + common_args)
     m360_timing = (time.time() - start_time)/60.0
 
     start_time = time.time()
