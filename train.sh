@@ -1,8 +1,14 @@
-export CUDA_VISIBLE_DEVICES=0
-# DATA_PATH="/home/ah2288/LP_MipNerF/data/nerf_synthetic/hotdog"
-python train.py -s /home/ah2288/gaussian-splatting/data/360_v2/kitchen \
+#!/bin/bash
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+DATA_PATH="${DATA_PATH:?Set DATA_PATH to a COLMAP or Blender scene}"
+MODEL_PATH="${MODEL_PATH:-./output}"
+
+python train.py -s "$DATA_PATH" \
     --eval \
-    --checkpoint_iteration 30000 \
-    --model_path "/home/ah2288/gs_baseline/gaussian-splatting/output_new/kitchen" 
-    
-    #/home/ah2288/gaussian-splatting/data/360_v2/bicycle --eval  #/home/ah2288/gaussian-splatting/data/tandt/t --eval 
+    --checkpoint_iterations 30000 \
+    -m "$MODEL_PATH" \
+    "$@"

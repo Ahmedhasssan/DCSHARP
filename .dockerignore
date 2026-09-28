@@ -1,0 +1,17 @@
+.git
+.gitignore
+**/__pycache__
+**/*.pyc
+**/*.so
+**/*.egg-info
+**/build
+**/dist
+scale_gradient
+data
+assets
+SIBR_viewers
+output
+eval
+*.gif
+*.mp4
+timing.txt

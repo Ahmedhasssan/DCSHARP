@@ -1,0 +1,42 @@
+services:
+  train:
+    build: .
+    image: dcsharp:latest
+    gpus: all
+    volumes:
+      - ${DATA_DIR:-./data}:/data
+      - ${OUTPUT_DIR:-./output}:/output
+    environment:
+      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-0}
+    command: ["train", "-s", "/data", "--eval", "-m", "/output", "--checkpoint_iterations", "30000"]
+
+  render:
+    image: dcsharp:latest
+    gpus: all
+    volumes:
+      - ${DATA_DIR:-./data}:/data
+      - ${OUTPUT_DIR:-./output}:/output
+    environment:
+      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-0}
+    command: ["render", "-m", "/output", "-s", "/data"]
+
+  metrics:
+    image: dcsharp:latest
+    gpus: all
+    volumes:
+      - ${OUTPUT_DIR:-./output}:/output
+    environment:
+      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-0}
+    command: ["metrics", "-m", "/output"]
+
+  eval:
+    image: dcsharp:latest
+    gpus: all
+    volumes:
+      - ${M360_PATH:-./data}:/data/360
+      - ${TAT_PATH:-./data/tandt}:/data/tandt
+      - ${DB_PATH:-./data/db}:/data/db
+      - ${OUTPUT_DIR:-./output}:/output
+    environment:
+      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-0}
+    command: ["eval", "-m360", "/data/360", "-tat", "/data/tandt", "-db", "/data/db", "--output_path", "/output"]

@@ -214,7 +214,14 @@ def prepare_output_and_logger(args):
     else:
         print("Tensorboard not available: not logging progress")
     return tb_writer
-score_lpips = lpips.LPIPS(net='alex').cuda()
+
+_lpips_fn = None
+
+def get_lpips():
+    global _lpips_fn
+    if _lpips_fn is None:
+        _lpips_fn = lpips.LPIPS(net='alex').cuda()
+    return _lpips_fn
 
 def get_cam_views(cam_poses):
     c2w = cam_poses
@@ -290,7 +297,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                     l1_test += l1_loss(image, gt_image).mean().double()
                     psnr_test += psnr(image, gt_image).mean().double()
                     ssim_test +=ssim(image, gt_image).mean().double()
-                    lpips_test += score_lpips(image, gt_image).mean().double()
+                    lpips_test += get_lpips()(image, gt_image).mean().double()
                 psnr_test /= len(config['cameras'])
                 ssim_test /= len(config['cameras'])
                 lpips_test /= len(config['cameras'])

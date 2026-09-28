@@ -11,7 +11,11 @@
 
 from setuptools import setup
 from torch.utils.cpp_extension import CUDAExtension, BuildExtension
+import glob
 import os
+
+for stale in glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), "simple_knn", "_C*.so")):
+    os.remove(stale)
 
 cxx_compiler_flags = []
 
