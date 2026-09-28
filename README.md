@@ -304,14 +304,13 @@ SSIM and PSNR are higher-is-better. LPIPS is lower-is-better.
 Please cite the original 3D Gaussian Splatting paper, which this code extends:
 
 ```bibtex
-@article{kerbl3Dgaussians,
-  author = {Kerbl, Bernhard and Kopanas, Georgios and Leimk{\"u}hler, Thomas and Drettakis, George},
-  title = {3D Gaussian Splatting for Real-Time Radiance Field Rendering},
-  journal = {ACM Transactions on Graphics},
-  number = {4},
-  volume = {42},
-  month = {July},
-  year = {2023}
+@inproceedings{hasssan2026dcsharp,
+  title={DCSHARP: 3D Gaussian Splatting with Direction Cosine Spherical Harmonics and Shape-Aware Pruning},
+  author={Hasssan, Ahmed and Meng, Jian and Xiangli, Yuanbo and Seo, Jae-sun},
+  booktitle={2026 IEEE/CVF Winter Conference on Applications of Computer Vision (WACV)},
+  pages={3628--3637},
+  year={2026},
+  organization={IEEE}
 }
 ```
 
