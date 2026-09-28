@@ -15,18 +15,16 @@
 #include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
 
-// Forward method for converting the input spherical harmonics
-// coefficients of each Gaussian to a simple RGB color.
+// Direction Cosine Spherical Harmonics (DCSH) to RGB.
+// Degrees 1-3 are scaled by 1/r, 1/r^2, and 1/r^3.
 __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const glm::vec3* means, glm::vec3 campos, const float* shs, bool* clamped)
 {
-	// The implementation is loosely based on code for 
-	// "Differentiable Point-Based Radiance Fields for 
-	// Efficient View Synthesis" by Zhang et al. (2022)
 	glm::vec3 pos = means[idx];
 	glm::vec3 dir = pos - campos;
 	dir = dir / glm::length(dir);
 
 	glm::vec3* sh = ((glm::vec3*)shs) + idx * max_coeffs;
+	// DCSH degree 0.
 	glm::vec3 result = SH_C0 * sh[0];
 
 	if (deg > 0)
@@ -37,13 +35,14 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 
 		float r = sqrtf(x*x + y*y + z*z);
 
-		// result = result - SH_C1 * y * sh[1] + SH_C1 * z * sh[2] - SH_C1 * x * sh[3];
+		// DCSH degree 1: sh[1..3] weight y, z, and x.
 		result = result + SH_C1[0] * y * sh[1]/r + SH_C1[1]/r * z * sh[2] + SH_C1[1]/r * x * sh[3];
 
 		if (deg > 1)
 		{
 			float xx = x * x, yy = y * y, zz = z * z;
 			float xy = x * y, yz = y * z, xz = x * z;
+			// DCSH degree 2, scaled by 1/r^2.
 			result = result +
 				SH_C2[0] * xy * sh[4]/(r*r) +
 				SH_C2[1] * yz * sh[5]/(r*r) +
@@ -53,6 +52,7 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 
 			if (deg > 2)
 			{
+				// DCSH degree 3, scaled by 1/r^3.
 				result = result +
 					SH_C3[0] * y * (3.0f * xx - yy) * sh[9]/(r*r*r) +
 					SH_C3[1] * xy * z * sh[10]/(r*r*r) +
@@ -247,8 +247,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
 		return;
 
-	// If colors have been precomputed, use them, otherwise convert
-	// spherical harmonics coefficients to RGB color.
+	// Precomputed color, or Direction Cosine Spherical Harmonics (DCSH).
 	if (colors_precomp == nullptr)
 	{
 		glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);

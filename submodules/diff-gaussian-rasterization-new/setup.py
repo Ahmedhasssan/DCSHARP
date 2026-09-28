@@ -11,8 +11,13 @@
 
 from setuptools import setup
 from torch.utils.cpp_extension import CUDAExtension, BuildExtension
+import glob
 import os
 os.path.dirname(os.path.abspath(__file__))
+
+# Drop any prebuilt _C binary so this install compiles the DCSH sources.
+for stale in glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), "diff_gaussian_rasterization", "_C*.so")):
+    os.remove(stale)
 
 setup(
     name="diff_gaussian_rasterization",

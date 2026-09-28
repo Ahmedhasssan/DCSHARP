@@ -18,45 +18,29 @@
 #define BLOCK_SIZE (BLOCK_X * BLOCK_Y)
 #define NUM_WARPS (BLOCK_SIZE/32)
 #define DGR_FIX_AA
-// Spherical harmonics coefficients
-// __device__ const float SH_C0 = 0.28209479177387814f;
-// __device__ const float SH_C1 = 0.4886025119029199f;
-// __device__ const float SH_C2[] = {
-// 	1.0925484305920792f,
-// 	-1.0925484305920792f,
-// 	0.31539156525252005f,
-// 	-1.0925484305920792f,
-// 	0.5462742152960396f
-// };
-// __device__ const float SH_C3[] = {
-// 	-0.5900435899266435f,
-// 	2.890611442640554f,
-// 	-0.4570457994644658f,
-// 	0.3731763325901154f,
-// 	-0.4570457994644658f,
-// 	1.445305721320277f,
-// 	-0.5900435899266435f
-// };
 
+// Direction Cosine Spherical Harmonics (DCSH), degrees 0-3.
 __device__ const float SH_C0 = 0.28209479177387814f;
-__device__ const float SH_C1[] = {1.7320508076f,
-    1.7320508076f,
-    1.7320508076f};
+__device__ const float SH_C1[] = {
+	1.7320508076f,
+	1.7320508076f,
+	1.7320508076f
+};
 __device__ const float SH_C2[] = {
 	3.8729833462f,
-    3.8729833462f,
-    1.1180339887f,
-    3.8729833462f,
-    1.1180339887f
+	3.8729833462f,
+	1.1180339887f,
+	3.8729833462f,
+	1.1180339887f
 };
 __device__ const float SH_C3[] = {
 	2.09165006634f,
-    5.123456124f,
-    1.6201851746f,
-    1.3228756555f,
-    1.6201851746f,
-    5.123456124f,
-    2.09165006634f
+	5.123456124f,
+	1.6201851746f,
+	1.3228756555f,
+	1.6201851746f,
+	5.123456124f,
+	2.09165006634f
 };
 
 __forceinline__ __device__ float ndc2Pix(float v, int S)

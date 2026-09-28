@@ -18,8 +18,7 @@ namespace cg = cooperative_groups;
 __device__ __forceinline__ float sq(float x) { return x * x; }
 
 
-// Backward pass for conversion of spherical harmonics to RGB for
-// each Gaussian.
+// Backward pass of Direction Cosine Spherical Harmonics (DCSH).
 __device__ void computeColorFromSH(int idx, int deg, int max_coeffs, const glm::vec3* means, glm::vec3 campos, const float* shs, const bool* clamped, const glm::vec3* dL_dcolor, glm::vec3* dL_dmeans, glm::vec3* dL_dshs)
 {
 	// Compute intermediate values, as it is done during forward
@@ -46,24 +45,18 @@ __device__ void computeColorFromSH(int idx, int deg, int max_coeffs, const glm::
 	// Target location for this Gaussian to write SH gradients to
 	glm::vec3* dL_dsh = dL_dshs + idx * max_coeffs;
 
-	// No tricks here, just high school-level calculus.
+	// DCSH degree 0.
 	float dRGBdsh0 = SH_C0;
 	dL_dsh[0] = dRGBdsh0 * dL_dRGB;
 	if (deg > 0)
 	{
-		// float dRGBdsh1 = -SH_C1 * y;
-		// float dRGBdsh2 = SH_C1 * z;
-		// float dRGBdsh3 = -SH_C1 * x;
+		// DCSH degree 1.
 		float dRGBdsh1 = SH_C1[0] * y;
 		float dRGBdsh2 = SH_C1[1] * z;
 		float dRGBdsh3 = SH_C1[2] * x;
 		dL_dsh[1] = dRGBdsh1 * dL_dRGB;
 		dL_dsh[2] = dRGBdsh2 * dL_dRGB;
 		dL_dsh[3] = dRGBdsh3 * dL_dRGB;
-
-		// dRGBdx = -SH_C1 * sh[3];
-		// dRGBdy = -SH_C1 * sh[1];
-		// dRGBdz = SH_C1 * sh[2];
 
 		dRGBdx = SH_C1[0] * sh[3];
 		dRGBdy = SH_C1[1] * sh[1];
@@ -74,6 +67,7 @@ __device__ void computeColorFromSH(int idx, int deg, int max_coeffs, const glm::
 			float xx = x * x, yy = y * y, zz = z * z;
 			float xy = x * y, yz = y * z, xz = x * z;
 
+			// DCSH degree 2.
 			float dRGBdsh4 = SH_C2[0] * xy;
 			float dRGBdsh5 = SH_C2[1] * yz;
 			float dRGBdsh6 = SH_C2[2] * (2.f * zz - xx - yy);
@@ -91,6 +85,7 @@ __device__ void computeColorFromSH(int idx, int deg, int max_coeffs, const glm::
 
 			if (deg > 2)
 			{
+				// DCSH degree 3.
 				float dRGBdsh9 = SH_C3[0] * y * (3.f * xx - yy);
 				float dRGBdsh10 = SH_C3[1] * xy * z;
 				float dRGBdsh11 = SH_C3[2] * y * (4.f * zz - xx - yy);
@@ -442,7 +437,7 @@ __global__ void preprocessCUDA(
 	// of cov2D and following SH conversion also affects it.
 	dL_dmeans[idx] += dL_dmean;
 
-	// Compute gradient updates due to computing colors from SHs
+	// Color loss through Direction Cosine Spherical Harmonics (DCSH).
 	if (shs)
 		computeColorFromSH(idx, D, M, (glm::vec3*)means, *campos, shs, clamped, (glm::vec3*)dL_dcolor, (glm::vec3*)dL_dmeans, (glm::vec3*)dL_dsh);
 

@@ -13,6 +13,7 @@ dependencies:
   - torchvision=0.13.1
   - tqdm
   - pip:
-    - submodules/diff-gaussian-rasterization
-    - submodules/simple-knn
+    # DCSH spherical harmonics live in these trees, not the empty vanilla slots.
+    - submodules/diff-gaussian-rasterization-new
+    - submodules/simple-knn-v1
     - opencv-python

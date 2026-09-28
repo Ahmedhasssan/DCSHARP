@@ -1,4 +1,10 @@
-export CUDA_VISIBLE_DEVICES=0
-# DATA_PATH="/home/ah2288/LP_MipNerF/data/nerf_synthetic/hotdog"
-python render.py -m "/home/ah2288/gs_baseline/gaussian-splatting/output_new/kitchen" \
-    -s /home/ah2288/gaussian-splatting/data/360_v2/kitchen 
+#!/bin/bash
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+DATA_PATH="${DATA_PATH:?Set DATA_PATH to the scene used for training}"
+MODEL_PATH="${MODEL_PATH:-./output}"
+
+python render.py -m "$MODEL_PATH" -s "$DATA_PATH" "$@"
